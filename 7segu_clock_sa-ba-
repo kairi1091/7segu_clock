@@ -4,6 +4,7 @@
 #include <HTTPClient.h>
 #define PIN 27        //INが接続されているピンを指定
 #define NUMPIXELS 74  //LEDの数を指定
+
 const int digitSegments[10][18] = {
   { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0 },  // 0
   { 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0 },  // 1
@@ -20,8 +21,11 @@ const int digitSegments[10][18] = {
 Adafruit_NeoPixel pixels(NUMPIXELS, PIN, NEO_GRB + NEO_KHZ800);  //800kHzでNeoPixelを駆動
 
 int flag;//:を点滅させるフラグ
+int life;
+int s[4];
 unsigned long previousTime;
 unsigned long ntptime;
+unsigned long waitingtime;
 
 struct tm timeInfo;  //時刻を格納するオブジェクト
 
@@ -51,6 +55,7 @@ void setup() {
 
   pixels.begin();  //NeoPixelを開始
   int flag = 1;
+  int life = 1;
   ntpacces();
 }
 
@@ -60,7 +65,6 @@ void ShowTime(int hour, int minute) {
   /* ShowTime関数は、構造型(struct)の変数を受け取れるので、ShowTime関数の中に、LED画面に表示するコードを追加する。*/
   int time_4_digits = hour * 100 + minute;
   //Serial.println(time_4_digits);
-  int s[4];
   for (int i = 3; i >= 0; i--) {
     s[i] = time_4_digits % 10;
     time_4_digits = (time_4_digits - s[i]) / 10;
@@ -81,7 +85,7 @@ void ShowTime(int hour, int minute) {
 
       int huestart = 0;//始まりの色（書き換える）
       int huefin = 65535;//終わりの色（書き換える）
-      int hue = (huefin - huestart) * index + huestart;//色の範囲を指定している(ここは書き換えない（0~65535))
+      int hue = ((huefin - huestart)/74) * index + huestart;//色の範囲を指定している(ここは書き換えない（0~65535))
       int sat = 255;
       int val = 200;
       
@@ -108,14 +112,24 @@ void ShowTime(int hour, int minute) {
 
 
 void loop() {
-
-  Clock();//1秒カウントアップ
-  ShowTime(timeInfo.tm_hour, timeInfo.tm_min);
-  if(millis() - ntptime > 180*1000){//ntpをとった時間から180秒たったら
-    ntpacces();
+  if (life == 1){
+    Clock();//1秒カウントアップ
+    ShowTime(timeInfo.tm_hour, timeInfo.tm_min);
+    if(millis() - ntptime > 180*1000){//ntpをとった時間から180秒たったら
+      ntpacces();
+    }
+    ClockOperation();
+  }else if(life == 2){
+    Clock();
+    ShowTime(timeInfo.tm_hour, timeInfo.tm_min);
+  }else if(life == 0){
+    Clock();
+    ClockOperation();
+    ShowTime(timeInfo.tm_hour, timeInfo.tm_min);
+    for(int i = 0; i<4; i++){
+      Serial.print(s[i]);
+    }
   }
-  ClockOperation();
-  
 }
 
 void Clock(){
@@ -146,35 +160,59 @@ void ntpacces(){
   Serial.print(timeInfo.tm_sec);
 }
 void ClockOperation(){
-  if (WiFi.status() == WL_CONNECTED) {
-    HTTPClient http;
+  if (millis() - waitingtime >= 1000) {   //プログラムが経過した時間が1秒経ったら
+    waitingtime = millis();   //基準時間に現在時間を代入
+    if (WiFi.status() == WL_CONNECTED) {
+      HTTPClient http;
 
-    // URLの設定
-    http.begin(serverUrl);
+      // URLの設定
+      http.begin(serverUrl);
 
-    // GETリクエストの送信
-    int httpResponseCode = http.GET();
+      // GETリクエストの送信
+      int httpResponseCode = http.GET();
 
-    if (httpResponseCode > 0) {
-      // HTTPレスポンスコードを表示
-      Serial.print("HTTP Response code: ");
-      Serial.println(httpResponseCode);
+      if (httpResponseCode > 0) {
+      //   // HTTPレスポンスコードを表示
+        Serial.print("HTTP Response code: ");
+        Serial.println(httpResponseCode);
 
-      // ペイロードの取得と表示
-      String payload = http.getString();
-      Serial.println("Received payload:");
-      Serial.println(payload);
+      //   // ペイロードの取得と表示
+        String payload = http.getString();
+        Serial.println("Received payload:");
+        Serial.println(payload);
+
+        int dataInt = payload.toInt();
+        int time[2];
+        
+        if (dataInt == 9999){
+          int life = 1;
+        }else if(dataInt == 9998){
+          int life = 2;
+        }else{
+          for (int i = 1; i >= 0; i--){
+          time[i] = dataInt % 100;
+          dataInt = (dataInt - time[i]) / 100;
+          }
+          int life =0;
+          timeInfo.tm_hour = time[0];
+          timeInfo.tm_min = time[1];
+
+          Serial.print(timeInfo.tm_hour);
+          Serial.print(timeInfo.tm_min);
+        }
+        Serial.println("Data content copied to another variable:");
+        Serial.print(dataInt);
+
+      } else {
+        Serial.print("Error code: ");
+        Serial.println(httpResponseCode);
+      }
+
+      // リクエストを終了
+      http.end();
     } else {
-      Serial.print("Error code: ");
-      Serial.println(httpResponseCode);
+      Serial.println("WiFi Disconnected");
     }
-
-    // リクエストを終了
-    http.end();
-  } else {
-    Serial.println("WiFi Disconnected");
+    // 過剰なリクエストを避けるために遅延を追加  // 必要に応じて遅延を調節
   }
-
-  // 過剰なリクエストを避けるために遅延を追加
-  delay(10000);  // 必要に応じて遅延を調整
-}
+  delay(100);
